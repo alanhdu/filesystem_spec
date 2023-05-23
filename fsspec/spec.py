@@ -28,7 +28,6 @@ import weakref
 from errno import ESPIPE
 from glob import has_magic
 from hashlib import sha256
-from typing import ClassVar
 
 from .callbacks import _DEFAULT_CALLBACK
 from .config import apply_config, conf
@@ -46,6 +45,7 @@ from .utils import (
 if TYPE_CHECKING:
     from typing_extensions import Self
     from fsspec.mapping import FSMap
+    from fsspec.caching import BaseCache
 
 from fsspec.callbacks import Callback
 from fsspec.implementations.http import HTTPFile, HTTPFileSystem, HTTPStreamFile
@@ -1780,14 +1780,14 @@ class AbstractBufferedFile(io.IOBase):
 
     def __init__(
         self,
-        fs: Union[DummyTestFS, HTTPFileSystem, DummyAsyncFS],
+        fs: AbstractFileSystem,
         path: str,
         mode: str = "rb",
-        block_size: Optional[Union[int, str]] = "default",
+        block_size: Union[int, Literal["default"], None] = "default",
         autocommit: bool = True,
-        cache_type: str = "readahead",
+        cache_type: Literal["readahead", "none", "mmap", "bytes"] = "readahead",
         cache_options: Optional[Dict[str, bool]] = None,
-        size: None = None,
+        size: Optional[int] = None,
         **kwargs,
     ) -> None:
         """
@@ -1821,8 +1821,8 @@ class AbstractBufferedFile(io.IOBase):
         self.path = path
         self.fs = fs
         self.mode = mode
-        self.blocksize = (
-            self.DEFAULT_BLOCK_SIZE if block_size in ["default", None] else block_size
+        self.blocksize: int = (
+            self.DEFAULT_BLOCK_SIZE if block_size in ["default", None] else block_size  # type: ignore[assignment]
         )
         self.loc = 0
         self.autocommit = autocommit
@@ -1850,32 +1850,32 @@ class AbstractBufferedFile(io.IOBase):
                 self.size = size
             else:
                 self.size = self.details["size"]
-            self.cache = caches[cache_type](
+            self.cache: Optional[BaseCache] = caches[cache_type](
                 self.blocksize, self._fetch_range, self.size, **cache_options
             )
         else:
             self.buffer = io.BytesIO()
-            self.offset = None
+            self.offset: Optional[int] = None
             self.forced = False
             self.location = None
 
     @property
-    def details(self):
+    def details(self) -> Entry:
         if self._details is None:
             self._details = self.fs.info(self.path)
         return self._details
 
     @details.setter
-    def details(self, value):
+    def details(self, value: Entry) -> None:
         self._details = value
         self.size = value["size"]
 
     @property
-    def full_name(self):
+    def full_name(self) -> str:
         return _unstrip_protocol(self.path, self.fs)
 
     @property
-    def closed(self):
+    def closed(self) -> bool:
         # get around this attr being read-only in IOBase
         # use getattr here, since this can be called during del
         return getattr(self, "_closed", True)
@@ -1884,30 +1884,30 @@ class AbstractBufferedFile(io.IOBase):
     def closed(self, c):
         self._closed = c
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         if "w" in self.mode:
             return id(self)
         else:
             return int(tokenize(self.details), 16)
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         """Files are equal if they have the same checksum, only in read mode"""
         return self.mode == "rb" and other.mode == "rb" and hash(self) == hash(other)
 
-    def commit(self):
+    def commit(self) -> None:
         """Move from temp to final destination"""
 
-    def discard(self):
+    def discard(self) -> None:
         """Throw away temporary file"""
 
-    def info(self):
+    def info(self) -> Entry:
         """File information about this path"""
         if "r" in self.mode:
             return self.details
         else:
             raise ValueError("Info not available while writing")
 
-    def tell(self):
+    def tell(self) -> int:
         """Current file location"""
         return self.loc
 
@@ -1937,7 +1937,7 @@ class AbstractBufferedFile(io.IOBase):
         self.loc = nloc
         return self.loc
 
-    def write(self, data):
+    def write(self, data) -> int:
         """
         Write data to buffer.
 
@@ -1961,7 +1961,7 @@ class AbstractBufferedFile(io.IOBase):
             self.flush()
         return out
 
-    def flush(self, force=False):
+    def flush(self, force: bool = False) -> None:
         """
         Write buffered data to backend store.
 
@@ -2003,7 +2003,7 @@ class AbstractBufferedFile(io.IOBase):
             self.offset += self.buffer.seek(0, 2)
             self.buffer = io.BytesIO()
 
-    def _upload_chunk(self, final=False):
+    def _upload_chunk(self, final: bool = False) -> Any:
         """Write one part of a multi-block file upload
 
         Parameters
@@ -2014,11 +2014,11 @@ class AbstractBufferedFile(io.IOBase):
         """
         # may not yet have been initialized, may need to call _initialize_upload
 
-    def _initiate_upload(self):
+    def _initiate_upload(self) -> None:
         """Create remote file/upload"""
         pass
 
-    def _fetch_range(self, start, end):
+    def _fetch_range(self, start: int, end: int) -> bytes:
         """Get the specified set of bytes from remote"""
         raise NotImplementedError
 
@@ -2042,11 +2042,12 @@ class AbstractBufferedFile(io.IOBase):
         if length == 0:
             # don't even bother calling fetch
             return b""
+        assert self.cache is not None
         out = self.cache._fetch(self.loc, self.loc + length)
         self.loc += len(out)
         return out
 
-    def readinto(self, b):
+    def readinto(self, b) -> int:
         """mirrors builtin file's readinto method
 
         https://docs.python.org/3/library/io.html#io.RawIOBase.readinto
@@ -2056,7 +2057,7 @@ class AbstractBufferedFile(io.IOBase):
         out[: len(data)] = data
         return len(data)
 
-    def readuntil(self, char=b"\n", blocks=None):
+    def readuntil(self, char: bytes = b"\n", blocks: Optional[int] = None) -> bytes:
         """Return data between current position and first occurrence of char
 
         char is included in the output, except if the end of the tile is
@@ -2084,7 +2085,7 @@ class AbstractBufferedFile(io.IOBase):
             out.append(part)
         return b"".join(out)
 
-    def readline(self):
+    def readline(self) -> bytes:  # type: ignore[override]
         """Read until first occurrence of newline character
 
         Note that, because of character encoding, this is not necessarily a
@@ -2092,16 +2093,16 @@ class AbstractBufferedFile(io.IOBase):
         """
         return self.readuntil(b"\n")
 
-    def __next__(self):
+    def __next__(self) -> bytes:
         out = self.readline()
         if out:
             return out
         raise StopIteration
 
-    def __iter__(self):
+    def __iter__(self) -> "Self":
         return self
 
-    def readlines(self):
+    def readlines(self) -> List[bytes]:  # type: ignore[override]
         """Return all data, split by the newline character"""
         data = self.read()
         lines = data.split(b"\n")
@@ -2112,7 +2113,7 @@ class AbstractBufferedFile(io.IOBase):
             return out + [lines[-1]]
         # return list(self)  ???
 
-    def readinto1(self, b):
+    def readinto1(self, b) -> int:
         return self.readinto(b)
 
     def close(self) -> None:
@@ -2136,15 +2137,15 @@ class AbstractBufferedFile(io.IOBase):
 
         self.closed = True
 
-    def readable(self):
+    def readable(self) -> bool:
         """Whether opened for reading"""
         return self.mode == "rb" and not self.closed
 
-    def seekable(self):
+    def seekable(self) -> bool:
         """Whether is seekable (only in read mode)"""
         return self.readable()
 
-    def writable(self):
+    def writable(self) -> bool:
         """Whether opened for writing"""
         return self.mode in {"wb", "ab"} and not self.closed
 
@@ -2157,7 +2158,7 @@ class AbstractBufferedFile(io.IOBase):
 
     __repr__ = __str__
 
-    def __enter__(self) -> Union[HTTPFile, HTTPStreamFile]:
+    def __enter__(self) -> "Self":
         return self
 
     def __exit__(self, *args) -> None:
