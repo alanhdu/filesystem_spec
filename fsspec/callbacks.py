@@ -1,3 +1,20 @@
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    Optional,
+    TypeVar,
+)
+
+if TYPE_CHECKING:
+    import tqdm
+
+T = TypeVar("T")
+
+
 class Callback:
     """
     Base class and interface for callback mechanism
@@ -19,13 +36,19 @@ class Callback:
         of these must be ``f(size, value, **kwargs)``
     """
 
-    def __init__(self, size=None, value=0, hooks=None, **kwargs):
+    def __init__(
+        self,
+        size: Optional[int] = None,
+        value: int = 0,
+        hooks: Optional[Dict[str, Callable]] = None,
+        **kwargs,
+    ) -> None:
         self.size = size
         self.value = value
         self.hooks = hooks or {}
         self.kw = kwargs
 
-    def set_size(self, size):
+    def set_size(self, size: Optional[int]) -> None:
         """
         Set the internal maximum size attribute
 
@@ -39,7 +62,7 @@ class Callback:
         self.size = size
         self.call()
 
-    def absolute_update(self, value):
+    def absolute_update(self, value: int) -> None:
         """
         Set the internal value state
 
@@ -52,7 +75,7 @@ class Callback:
         self.value = value
         self.call()
 
-    def relative_update(self, inc=1):
+    def relative_update(self, inc: int = 1) -> None:
         """
         Delta increment the internal counter
 
@@ -65,7 +88,7 @@ class Callback:
         self.value += inc
         self.call()
 
-    def call(self, hook_name=None, **kwargs):
+    def call(self, hook_name: Optional[str] = None, **kwargs) -> Optional[int]:
         """
         Execute hook(s) with current state
 
@@ -78,17 +101,18 @@ class Callback:
         kwargs: passed on to (all) hook(s)
         """
         if not self.hooks:
-            return
+            return None
         kw = self.kw.copy()
         kw.update(kwargs)
         if hook_name:
             if hook_name not in self.hooks:
-                return
+                return None
             return self.hooks[hook_name](self.size, self.value, **kw)
         for hook in self.hooks.values() or []:
             hook(self.size, self.value, **kw)
+        return None
 
-    def wrap(self, iterable):
+    def wrap(self, iterable: Iterable[T]) -> Iterator[T]:
         """
         Wrap an iterable to call ``relative_update`` on each iterations
 
@@ -101,7 +125,7 @@ class Callback:
             self.relative_update()
             yield item
 
-    def branch(self, path_1, path_2, kwargs):
+    def branch(self, path_1: str, path_2: str, kwargs: Dict[Any, Any]) -> None:
         """
         Set callbacks for child transfers
 
@@ -135,7 +159,7 @@ class Callback:
         return self.no_op
 
     @classmethod
-    def as_callback(cls, maybe_callback=None):
+    def as_callback(cls, maybe_callback: Optional["Callback"] = None) -> "Callback":
         """Transform callback=... into Callback instance
 
         For the special value of ``None``, return the global instance of
@@ -152,7 +176,7 @@ class NoOpCallback(Callback):
     This implementation of Callback does exactly nothing
     """
 
-    def call(self, *args, **kwargs):
+    def call(self, *args, **kwargs) -> None:
         return None
 
 
@@ -211,7 +235,9 @@ class TqdmCallback(Callback):
         )
     """
 
-    def __init__(self, tqdm_kwargs=None, *args, **kwargs):
+    def __init__(
+        self, tqdm_kwargs: Optional[Dict[str, Any]] = None, *args, **kwargs
+    ) -> None:
         try:
             import tqdm
 
@@ -224,13 +250,17 @@ class TqdmCallback(Callback):
         self._tqdm_kwargs = tqdm_kwargs or {}
         super().__init__(*args, **kwargs)
 
-    def set_size(self, size):
-        self.tqdm = self._tqdm.tqdm(total=size, **self._tqdm_kwargs)
+    def set_size(self, size: Optional[int]) -> None:
+        self.tqdm: Optional["tqdm.tqdm"] = self._tqdm.tqdm(
+            total=size, **self._tqdm_kwargs
+        )
 
-    def relative_update(self, inc=1):
+    def relative_update(self, inc: int = 1) -> None:
+        assert self.tqdm is not None
         self.tqdm.update(inc)
 
-    def __del__(self):
+    def __del__(self) -> None:
+        assert self.tqdm is not None
         self.tqdm.close()
         self.tqdm = None
 
