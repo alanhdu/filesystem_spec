@@ -4,14 +4,16 @@ import configparser
 import json
 import os
 import warnings
-from typing import Any
+from typing import Any, Dict, Mapping, Optional, Union
 
 conf: dict[str, dict[str, Any]] = {}
 default_conf_dir = os.path.join(os.path.expanduser("~"), ".config/fsspec")
 conf_dir = os.environ.get("FSSPEC_CONFIG_DIR", default_conf_dir)
 
 
-def set_conf_env(conf_dict, envdict=os.environ):
+def set_conf_env(
+    conf_dict: Dict[str, Dict[str, Any]], envdict: Mapping[str, str] = os.environ
+) -> None:
     """Set config values from environment variables
 
     Looks for variables of the form ``FSSPEC_<protocol>`` and
@@ -61,7 +63,7 @@ def set_conf_env(conf_dict, envdict=os.environ):
         conf_dict.setdefault(proto.lower(), {})[kwarg.lower()] = envdict[key]
 
 
-def set_conf_files(cdir, conf_dict):
+def set_conf_files(cdir: Union[str, os.PathLike], conf_dict: Dict[Any, Any]) -> None:
     """Set config values from files
 
     Scans for INI and JSON files in the given dictionary, and uses their
@@ -96,7 +98,9 @@ def set_conf_files(cdir, conf_dict):
                 conf_dict.setdefault(key, {}).update(dict(js[key]))
 
 
-def apply_config(cls, kwargs, conf_dict=None):
+def apply_config(
+    cls: Any, kwargs: Dict[str, Any], conf_dict: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Supply default values for kwargs when instantiating class
 
     Augments the passed kwargs, by finding entries in the config dict
@@ -116,7 +120,7 @@ def apply_config(cls, kwargs, conf_dict=None):
     if conf_dict is None:
         conf_dict = conf
     protos = cls.protocol if isinstance(cls.protocol, (tuple, list)) else [cls.protocol]
-    kw = {}
+    kw: Dict[str, Any] = {}
     for proto in protos:
         # default kwargs from the current state of the config
         if proto in conf_dict:
