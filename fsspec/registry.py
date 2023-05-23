@@ -3,6 +3,10 @@ from __future__ import annotations
 import importlib
 import types
 import warnings
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
+
+if TYPE_CHECKING:
+    from fsspec.spec import AbstractFileSystem
 
 __all__ = ["registry", "get_filesystem_class", "default"]
 
@@ -14,7 +18,12 @@ registry = types.MappingProxyType(_registry)
 default = "file"
 
 
-def register_implementation(name, cls, clobber=False, errtxt=None):
+def register_implementation(
+    name: str,
+    cls: Union[str, Type],
+    clobber: bool = False,
+    errtxt: Optional[str] = None,
+) -> None:
     """Add implementation class to the registry
 
     Parameters
@@ -59,7 +68,7 @@ def register_implementation(name, cls, clobber=False, errtxt=None):
 
 # protocols mapped to the class which implements them. This dict can
 # updated with register_implementation
-known_implementations = {
+known_implementations: Dict[str, Dict[str, str]] = {
     "file": {"class": "fsspec.implementations.local.LocalFileSystem"},
     "memory": {"class": "fsspec.implementations.memory.MemoryFileSystem"},
     "dropbox": {
@@ -203,7 +212,7 @@ known_implementations = {
 }
 
 
-def get_filesystem_class(protocol):
+def get_filesystem_class(protocol: str) -> Any:
     """Fetch named protocol implementation from the registry
 
     The dict ``known_implementations`` maps protocol names to the locations
@@ -233,24 +242,24 @@ def get_filesystem_class(protocol):
     return cls
 
 
-def _import_class(cls, minv=None):
+def _import_class(cls: str, minv: None = None) -> Any:
     """Take a string FQP and return the imported class or identifier
 
-    clas is of the form "package.module.klass" or "package.module:subobject.klass"
+    cls is of the form "package.module.klass" or "package.module:subobject.klass"
     """
     if ":" in cls:
-        mod, name = cls.rsplit(":", 1)
-        mod = importlib.import_module(mod)
+        modname, name = cls.rsplit(":", 1)
+        mod = importlib.import_module(modname)
         for part in name.split("."):
             mod = getattr(mod, part)
         return mod
     else:
-        mod, name = cls.rsplit(".", 1)
-        mod = importlib.import_module(mod)
+        modname, name = cls.rsplit(".", 1)
+        mod = importlib.import_module(modname)
         return getattr(mod, name)
 
 
-def filesystem(protocol, **storage_options):
+def filesystem(protocol: str, **storage_options) -> "AbstractFileSystem":
     """Instantiate filesystems for given protocol and arguments
 
     ``storage_options`` are specific to the protocol being chosen, and are
@@ -267,7 +276,7 @@ def filesystem(protocol, **storage_options):
     return cls(**storage_options)
 
 
-def available_protocols():
+def available_protocols() -> List[str]:
     """Return a list of the implemented protocols.
 
     Note that any given protocol may require extra packages to be importable.
