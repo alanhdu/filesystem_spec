@@ -1,5 +1,24 @@
 from __future__ import annotations
 
+from typing import (
+    Any,
+    Dict,
+    IO,
+    Iterable,
+    Set,
+    Generator,
+    overload,
+    Literal,
+    List,
+    MutableMapping,
+    Optional,
+    Union,
+    Tuple,
+    ClassVar,
+    Sequence,
+    Mapping,
+    TYPE_CHECKING,
+)
 import io
 import logging
 import os
@@ -13,7 +32,7 @@ from typing import ClassVar
 
 from .callbacks import _DEFAULT_CALLBACK
 from .config import apply_config, conf
-from .dircache import DirCache
+from .dircache import DirCache, Entry
 from .transaction import Transaction
 from .utils import (
     _unstrip_protocol,
@@ -24,10 +43,22 @@ from .utils import (
     tokenize,
 )
 
+if TYPE_CHECKING:
+    from typing_extensions import Self
+    from fsspec.mapping import FSMap
+
+from fsspec.callbacks import Callback
+from fsspec.implementations.http import HTTPFile, HTTPFileSystem, HTTPStreamFile
+from fsspec.transaction import Transaction
+
 logger = logging.getLogger("fsspec")
 
+_PathLike = Union[str, os.PathLike[str]]
 
-def make_instance(cls, args, kwargs):
+
+def make_instance(
+    cls: Any, args: Sequence[Any], kwargs: Mapping[str, Any]
+) -> "AbstractFileSystem":
     return cls(*args, **kwargs)
 
 
@@ -48,19 +79,22 @@ class _Cached(type):
     be made for a filesystem instance to be garbage collected.
     """
 
-    def __init__(cls, *args, **kwargs):
+    cachable: ClassVar[bool]
+    _extra_tokenize_attributes: ClassVar[Sequence[str]]
+
+    def __init__(cls, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         # Note: we intentionally create a reference here, to avoid garbage
         # collecting instances when all other references are gone. To really
         # delete a FileSystem, the cache must be cleared.
         if conf.get("weakref_instance_cache"):  # pragma: no cover
             # debug option for analysing fork/spawn conditions
-            cls._cache = weakref.WeakValueDictionary()
+            cls._cache: MutableMapping[str, Any] = weakref.WeakValueDictionary()
         else:
             cls._cache = {}
         cls._pid = os.getpid()
 
-    def __call__(cls, *args, **kwargs):
+    def __call__(cls, *args, **kwargs) -> "AbstractFileSystem":
         kwargs = apply_config(cls, kwargs)
         extra_tokens = tuple(
             getattr(cls, attr, None) for attr in cls._extra_tokenize_attributes
@@ -104,8 +138,13 @@ class AbstractFileSystem(metaclass=_Cached):
     _cached = False
     blocksize = 2**22
     sep = "/"
+<<<<<<< HEAD
     protocol: ClassVar[str | tuple[str, ...]] = "abstract"
     _latest = None
+=======
+    protocol: ClassVar[Union[str, Tuple[str, ...]]] = "abstract"
+    _latest: Optional[str] = None
+>>>>>>> 4e9da8d (WIP AbstractFileSystem)
     async_impl = False
     mirror_sync_methods = False
     root_marker = ""  # For some FSs, may require leading '/' or other character
@@ -113,7 +152,7 @@ class AbstractFileSystem(metaclass=_Cached):
     #: Extra *class attributes* that should be considered when hashing.
     _extra_tokenize_attributes = ()
 
-    def __init__(self, *args, **storage_options):
+    def __init__(self, *args, **storage_options) -> None:
         """Create and configure file-system instance
 
         Instances may be cachable, so if similar enough arguments are seen
@@ -142,8 +181,8 @@ class AbstractFileSystem(metaclass=_Cached):
             return
         self._cached = True
         self._intrans = False
-        self._transaction = None
-        self._invalidated_caches_in_transaction = []
+        self._transaction: Optional[Transaction] = None
+        self._invalidated_caches_in_transaction: List[Optional[str]] = []
         self.dircache = DirCache(**storage_options)
 
         if storage_options.pop("add_docs", None):
@@ -152,7 +191,9 @@ class AbstractFileSystem(metaclass=_Cached):
         if storage_options.pop("add_aliases", None):
             warnings.warn("add_aliases has been removed.", FutureWarning)
         # This is set in _Cached
-        self._fs_token_ = None
+        self._fs_token_: str
+        self.storage_args: Tuple[Any, ...]
+        self.storage_options: Dict[str, Any]
 
     @property
     def fsid(self):
@@ -162,20 +203,30 @@ class AbstractFileSystem(metaclass=_Cached):
         raise NotImplementedError
 
     @property
-    def _fs_token(self):
+    def _fs_token(self) -> str:
         return self._fs_token_
 
-    def __dask_tokenize__(self):
+    def __dask_tokenize__(self) -> str:
         return self._fs_token
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return int(self._fs_token, 16)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, type(self)) and self._fs_token == other._fs_token
 
-    def __reduce__(self):
+    def __reduce__(self) -> Any:
         return make_instance, (type(self), self.storage_args, self.storage_options)
+
+    @classmethod
+    @overload
+    def _strip_protocol(cls, path: List[_PathLike]) -> List[str]:
+        ...
+
+    @classmethod
+    @overload
+    def _strip_protocol(cls, path: _PathLike) -> str:
+        ...
 
     @classmethod
     def _strip_protocol(cls, path):
@@ -205,7 +256,7 @@ class AbstractFileSystem(metaclass=_Cached):
         return f"{protos[0]}://{name}"
 
     @staticmethod
-    def _get_kwargs_from_urls(path):
+    def _get_kwargs_from_urls(path: str) -> Dict[Any, Any]:
         """If kwargs can be encoded in the paths, extract them here
 
         This should happen before instantiation of the class; incoming paths
@@ -218,17 +269,18 @@ class AbstractFileSystem(metaclass=_Cached):
         return {}
 
     @classmethod
-    def current(cls):
+    def current(cls) -> "Self":
         """Return the most recently instantiated FileSystem
 
         If no instance has been created, then create one with defaults
         """
         if cls._latest in cls._cache:
+            assert cls._latest is not None
             return cls._cache[cls._latest]
         return cls()
 
     @property
-    def transaction(self):
+    def transaction(self) -> Transaction:
         """A context within which files are committed together upon exit
 
         Requires the file class to implement `.commit()` and `.discard()`
@@ -238,13 +290,13 @@ class AbstractFileSystem(metaclass=_Cached):
             self._transaction = Transaction(self)
         return self._transaction
 
-    def start_transaction(self):
+    def start_transaction(self) -> Transaction:
         """Begin write transaction for deferring files, non-context version"""
         self._intrans = True
         self._transaction = Transaction(self)
         return self.transaction
 
-    def end_transaction(self):
+    def end_transaction(self) -> None:
         """Finish write transaction, non-context version"""
         self.transaction.complete()
         self._transaction = None
@@ -253,7 +305,7 @@ class AbstractFileSystem(metaclass=_Cached):
             self.invalidate_cache(path)
         self._invalidated_caches_in_transaction.clear()
 
-    def invalidate_cache(self, path=None):
+    def invalidate_cache(self, path: Optional[str] = None) -> None:
         """
         Discard any cached directory information
 
@@ -270,7 +322,7 @@ class AbstractFileSystem(metaclass=_Cached):
         if self._intrans:
             self._invalidated_caches_in_transaction.append(path)
 
-    def mkdir(self, path, create_parents=True, **kwargs):
+    def mkdir(self, path: str, create_parents: bool = True, **kwargs) -> None:
         """
         Create directory entry at path
 
@@ -288,7 +340,7 @@ class AbstractFileSystem(metaclass=_Cached):
         """
         pass  # not necessary to implement, may not have directories
 
-    def makedirs(self, path, exist_ok=False):
+    def makedirs(self, path: str, exist_ok: bool = False) -> None:
         """Recursively make directories
 
         Creates directory at path and any intervening required directories.
@@ -304,9 +356,17 @@ class AbstractFileSystem(metaclass=_Cached):
         """
         pass  # not necessary to implement, may not have directories
 
-    def rmdir(self, path):
+    def rmdir(self, path: str) -> None:
         """Remove a directory, if empty"""
         pass  # not necessary to implement, may not have directories
+
+    @overload
+    def ls(self, path: str, detail: Literal[True] = True, **kwargs) -> List[Entry]:
+        ...
+
+    @overload
+    def ls(self, path: str, detail: Literal[False], **kwargs) -> List[str]:
+        ...
 
     def ls(self, path, detail=True, **kwargs):
         """List objects at path.
@@ -349,7 +409,7 @@ class AbstractFileSystem(metaclass=_Cached):
         """
         raise NotImplementedError
 
-    def _ls_from_cache(self, path):
+    def _ls_from_cache(self, path: str) -> Optional[List[Entry]]:
         """Check cache for listing
 
         Returns listing, if found (may be empty list for a directly that exists
@@ -372,7 +432,49 @@ class AbstractFileSystem(metaclass=_Cached):
         except KeyError:
             pass
 
-    def walk(self, path, maxdepth=None, topdown=True, **kwargs):
+        return None
+
+    @overload
+    def walk(
+        self,
+        path: str,
+        maxdepth: Optional[int] = None,
+        topdown: bool = True,
+        *,
+        details: Literal[True],
+        **kwargs,
+    ) -> Generator[
+        Tuple[str, Dict[Any, Any], Dict[Any, Any]],
+        None,
+        Optional[Tuple[str, Dict[Any, Any], Dict[Any, Any]]],
+    ]:
+        ...
+
+    @overload
+    def walk(
+        self,
+        path: str,
+        maxdepth: Optional[int] = None,
+        topdown: bool = True,
+        *,
+        details: Literal[False] = False,
+        **kwargs,
+    ) -> Generator[
+        Tuple[str, List[Any], List[Any]],
+        None,
+        Optional[Tuple[str, Dict[Any, Any], Dict[Any, Any]]],
+    ]:
+        ...
+
+    def walk(
+        self,
+        path: str,
+        maxdepth: Optional[int] = None,
+        topdown: bool = True,
+        *,
+        detail: bool = False,
+        **kwargs,
+    ) -> Generator[Tuple[str, Any, Any], None, Optional[Tuple[str, Any, Any]]]:
         """Return all files belows path
 
         List all files, recursing into subdirectories; output is iterator-style,
@@ -406,10 +508,9 @@ class AbstractFileSystem(metaclass=_Cached):
 
         path = self._strip_protocol(path)
         full_dirs = {}
-        dirs = {}
-        files = {}
+        dirs: Any = {}
+        files: Any = {}
 
-        detail = kwargs.pop("detail", False)
         try:
             listing = self.ls(path, detail=True, **kwargs)
         except (FileNotFoundError, OSError):
@@ -445,7 +546,7 @@ class AbstractFileSystem(metaclass=_Cached):
             if maxdepth < 1:
                 if not topdown:
                     yield path, dirs, files
-                return
+                return None
 
         for d in dirs:
             yield from self.walk(
@@ -459,8 +560,39 @@ class AbstractFileSystem(metaclass=_Cached):
         if not topdown:
             # Yield after recursion if walking bottom up
             yield path, dirs, files
+        return None
 
-    def find(self, path, maxdepth=None, withdirs=False, detail=False, **kwargs):
+    @overload
+    def find(
+        self,
+        path: _PathLike,
+        maxdepth: Optional[int] = None,
+        withdirs: bool = False,
+        detail: Literal[False] = False,
+        **kwargs,
+    ) -> List[str]:
+        ...
+
+    @overload
+    def find(
+        self,
+        path: _PathLike,
+        maxdepth: Optional[int] = None,
+        withdirs: bool = False,
+        *,
+        detail: Literal[True],
+        **kwargs,
+    ) -> Dict[str, Dict[Any, Any]]:
+        ...
+
+    def find(
+        self,
+        path: _PathLike,
+        maxdepth: Optional[int] = None,
+        withdirs: bool = False,
+        detail: bool = False,
+        **kwargs,
+    ) -> Any:
         """List all files below path.
 
         Like posix ``find`` command without conditions
@@ -492,7 +624,36 @@ class AbstractFileSystem(metaclass=_Cached):
         else:
             return {name: out[name] for name in names}
 
-    def du(self, path, total=True, maxdepth=None, withdirs=False, **kwargs):
+    @overload
+    def du(
+        self,
+        path: _PathLike,
+        total: Literal[True] = True,
+        maxdepth: Optional[int] = None,
+        withdirs: bool = False,
+        **kwargs,
+    ) -> int:
+        ...
+
+    @overload
+    def du(
+        self,
+        path: _PathLike,
+        total: Literal[False],
+        maxdepth: Optional[int] = None,
+        withdirs: bool = False,
+        **kwargs,
+    ) -> int:
+        ...
+
+    def du(
+        self,
+        path: _PathLike,
+        total: bool = True,
+        maxdepth: Optional[int] = None,
+        withdirs: bool = False,
+        **kwargs,
+    ) -> Union[Dict[str, int], int]:
         """Space used by files and optionally directories within a path
 
         Directory size does not include the size of its contents.
@@ -513,7 +674,7 @@ class AbstractFileSystem(metaclass=_Cached):
         Dict of {path: size} if total=False, or int otherwise, where numbers
         refer to bytes used.
         """
-        sizes = {}
+        sizes: Dict[str, int] = {}
         if withdirs and self.isdir(path):
             # Include top-level directory in output
             info = self.info(path)
@@ -526,7 +687,15 @@ class AbstractFileSystem(metaclass=_Cached):
         else:
             return sizes
 
-    def glob(self, path, **kwargs):
+    @overload
+    def glob(self, path: str, *, detail: Literal[False] = False, **kwargs) -> List[str]:
+        ...
+
+    @overload
+    def glob(self, path: str, *, detail: Literal[True], **kwargs) -> Dict[str, Entry]:
+        ...
+
+    def glob(self, path: str, *, detail: bool = False, **kwargs):
         """
         Find files by glob-matching.
 
@@ -552,11 +721,9 @@ class AbstractFileSystem(metaclass=_Cached):
 
         ind = min(indstar, indques, indbrace)
 
-        detail = kwargs.pop("detail", False)
-
         if not has_magic(path):
             root = path
-            depth = 1
+            depth: Optional[int] = 1
             if ends:
                 path += "/*"
             elif self.exists(path):
@@ -603,18 +770,18 @@ class AbstractFileSystem(metaclass=_Cached):
         )
         pattern = re.sub("[*]{2}", "=PLACEHOLDER=", pattern)
         pattern = re.sub("[*]", "[^/]*", pattern)
-        pattern = re.compile(pattern.replace("=PLACEHOLDER=", ".*"))
+        regex = re.compile(pattern.replace("=PLACEHOLDER=", ".*"))
         out = {
             p: allpaths[p]
             for p in sorted(allpaths)
-            if pattern.match(p.replace("//", "/").rstrip("/"))
+            if regex.match(p.replace("//", "/").rstrip("/"))
         }
         if detail:
             return out
         else:
             return list(out)
 
-    def exists(self, path, **kwargs):
+    def exists(self, path: _PathLike, **kwargs) -> bool:
         """Is there a file at the given path"""
         try:
             self.info(path, **kwargs)
@@ -623,12 +790,12 @@ class AbstractFileSystem(metaclass=_Cached):
             # any exception allowed bar FileNotFoundError?
             return False
 
-    def lexists(self, path, **kwargs):
+    def lexists(self, path: _PathLike, **kwargs):
         """If there is a file at the given path (including
         broken links)"""
         return self.exists(path)
 
-    def info(self, path, **kwargs):
+    def info(self, path: _PathLike, **kwargs) -> Entry:
         """Give details of entry at path
 
         Returns a single dictionary, with exactly the same information as ``ls``
@@ -662,7 +829,7 @@ class AbstractFileSystem(metaclass=_Cached):
         else:
             raise FileNotFoundError(path)
 
-    def checksum(self, path):
+    def checksum(self, path: _PathLike) -> int:
         """Unique value for current version of file
 
         If the checksum is the same from one moment to another, the contents
@@ -675,29 +842,36 @@ class AbstractFileSystem(metaclass=_Cached):
         """
         return int(tokenize(self.info(path)), 16)
 
-    def size(self, path):
+    def size(self, path: _PathLike) -> Optional[int]:
         """Size in bytes of file"""
         return self.info(path).get("size", None)
 
-    def sizes(self, paths):
+    def sizes(self, paths: Iterable[_PathLike]) -> List[Optional[int]]:
         """Size in bytes of each file in a list of paths"""
         return [self.size(p) for p in paths]
 
-    def isdir(self, path):
+    def isdir(self, path: _PathLike) -> bool:
         """Is this entry directory-like?"""
         try:
             return self.info(path)["type"] == "directory"
         except OSError:
             return False
 
-    def isfile(self, path):
+    def isfile(self, path: _PathLike) -> bool:
         """Is this entry file-like?"""
         try:
             return self.info(path)["type"] == "file"
         except:  # noqa: E722
             return False
 
-    def read_text(self, path, encoding=None, errors=None, newline=None, **kwargs):
+    def read_text(
+        self,
+        path: _PathLike,
+        encoding: Optional[str] = None,
+        errors: Optional[str] = None,
+        newline: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """Get the contents of the file as a string.
 
         Parameters
@@ -717,8 +891,14 @@ class AbstractFileSystem(metaclass=_Cached):
             return f.read()
 
     def write_text(
-        self, path, value, encoding=None, errors=None, newline=None, **kwargs
-    ):
+        self,
+        path: _PathLike,
+        value: str,
+        encoding: Optional[str] = None,
+        errors: Optional[str] = None,
+        newline: Optional[str] = None,
+        **kwargs,
+    ) -> int:
         """Write the text to the given file.
 
         An existing file will be overwritten.
@@ -741,7 +921,13 @@ class AbstractFileSystem(metaclass=_Cached):
         ) as f:
             return f.write(value)
 
-    def cat_file(self, path, start=None, end=None, **kwargs):
+    def cat_file(
+        self,
+        path: str,
+        start: Optional[int] = None,
+        end: Optional[int] = None,
+        **kwargs,
+    ) -> bytes:
         """Get the content of a file
 
         Parameters
@@ -766,12 +952,25 @@ class AbstractFileSystem(metaclass=_Cached):
                 return f.read(end - f.tell())
             return f.read()
 
-    def pipe_file(self, path, value, **kwargs):
+    def pipe_file(self, path: str, value: bytes, **kwargs) -> None:
         """Set the bytes of given file"""
         with self.open(path, "wb", **kwargs) as f:
             f.write(value)
 
-    def pipe(self, path, value=None, **kwargs):
+    @overload
+    def pipe(self, path: str, value: bytes, **kwargs) -> None:
+        ...
+
+    @overload
+    def pipe(self, path: Dict[str, bytes], value: Any = None, **kwargs) -> None:
+        ...
+
+    def pipe(
+        self,
+        path: Union[Dict[str, bytes], Dict[str, Union[bytes, bytearray]], str],
+        value: Optional[bytes] = None,
+        **kwargs,
+    ) -> None:
         """Put value into path
 
         (counterpart to ``cat``)
@@ -786,6 +985,7 @@ class AbstractFileSystem(metaclass=_Cached):
             ``path`` is a dict
         """
         if isinstance(path, str):
+            assert value is not None
             self.pipe_file(self._strip_protocol(path), value, **kwargs)
         elif isinstance(path, dict):
             for k, v in path.items():
@@ -794,8 +994,14 @@ class AbstractFileSystem(metaclass=_Cached):
             raise ValueError("path must be str or dict")
 
     def cat_ranges(
-        self, paths, starts, ends, max_gap=None, on_error="return", **kwargs
-    ):
+        self,
+        paths: List[str],
+        starts: Union[List[Optional[int]], Optional[int]],
+        ends: Union[List[Optional[int]], Optional[int]],
+        max_gap: None = None,
+        on_error: str = "return",
+        **kwargs,
+    ) -> List[Union[bytes, Exception]]:
         if max_gap is not None:
             raise NotImplementedError
         if not isinstance(paths, list):
@@ -803,10 +1009,10 @@ class AbstractFileSystem(metaclass=_Cached):
         if not isinstance(starts, list):
             starts = [starts] * len(paths)
         if not isinstance(ends, list):
-            ends = [starts] * len(paths)
+            ends = [ends] * len(paths)
         if len(starts) != len(paths) or len(ends) != len(paths):
             raise ValueError
-        out = []
+        out: List[Union[bytes, Exception]] = []
         for p, s, e in zip(paths, starts, ends):
             try:
                 out.append(self.cat_file(p, s, e))
@@ -817,7 +1023,13 @@ class AbstractFileSystem(metaclass=_Cached):
                     raise
         return out
 
-    def cat(self, path, recursive=False, on_error="raise", **kwargs):
+    def cat(
+        self,
+        path: Union[List[str], str],
+        recursive: Optional[bool] = False,
+        on_error: Literal["raise", "omit", "return"] = "raise",
+        **kwargs,
+    ) -> Any:
         """Fetch (potentially multiple) paths' contents
 
         Parameters
@@ -844,7 +1056,7 @@ class AbstractFileSystem(metaclass=_Cached):
             or isinstance(path, list)
             or paths[0] != self._strip_protocol(path)
         ):
-            out = {}
+            out: Dict[str, Union[Exception, bytes]] = {}
             for path in paths:
                 try:
                     out[path] = self.cat_file(path, **kwargs)
@@ -858,8 +1070,13 @@ class AbstractFileSystem(metaclass=_Cached):
             return self.cat_file(paths[0], **kwargs)
 
     def get_file(
-        self, rpath, lpath, callback=_DEFAULT_CALLBACK, outfile=None, **kwargs
-    ):
+        self,
+        rpath: str,
+        lpath: str,
+        callback: Callback = _DEFAULT_CALLBACK,
+        outfile: Optional[IO[bytes]] = None,
+        **kwargs,
+    ) -> None:
         """Copy single remote file to local"""
         if isfilelike(lpath):
             outfile = lpath
@@ -873,7 +1090,7 @@ class AbstractFileSystem(metaclass=_Cached):
 
             try:
                 callback.set_size(getattr(f1, "size", None))
-                data = True
+                data = b"1"
                 while data:
                     data = f1.read(self.blocksize)
                     segment_len = outfile.write(data)
@@ -886,13 +1103,13 @@ class AbstractFileSystem(metaclass=_Cached):
 
     def get(
         self,
-        rpath,
-        lpath,
-        recursive=False,
-        callback=_DEFAULT_CALLBACK,
-        maxdepth=None,
+        rpath: Union[List[str], str],
+        lpath: Union[List[str], str],
+        recursive: bool = False,
+        callback: Callback = _DEFAULT_CALLBACK,
+        maxdepth: None = None,
         **kwargs,
-    ):
+    ) -> None:
         """Copy file(s) to local.
 
         Copies a specific file or tree of files (if recursive=True). If lpath
@@ -935,7 +1152,13 @@ class AbstractFileSystem(metaclass=_Cached):
             callback.branch(rpath, lpath, kwargs)
             self.get_file(rpath, lpath, **kwargs)
 
-    def put_file(self, lpath, rpath, callback=_DEFAULT_CALLBACK, **kwargs):
+    def put_file(
+        self,
+        lpath: Union[str, os.PathLike[str]],
+        rpath: str,
+        callback: Callback = _DEFAULT_CALLBACK,
+        **kwargs,
+    ) -> None:
         """Copy single file to remote"""
         if os.path.isdir(lpath):
             self.makedirs(rpath, exist_ok=True)
@@ -957,13 +1180,13 @@ class AbstractFileSystem(metaclass=_Cached):
 
     def put(
         self,
-        lpath,
-        rpath,
-        recursive=False,
-        callback=_DEFAULT_CALLBACK,
-        maxdepth=None,
+        lpath: Union[List[str], str],
+        rpath: Union[List[str], str],
+        recursive: bool = False,
+        callback: Callback = _DEFAULT_CALLBACK,
+        maxdepth: None = None,
         **kwargs,
-    ):
+    ) -> None:
         """Copy file(s) from local.
 
         Copies a specific file or tree of files (if recursive=True). If rpath
@@ -1009,12 +1232,12 @@ class AbstractFileSystem(metaclass=_Cached):
             callback.branch(lpath, rpath, kwargs)
             self.put_file(lpath, rpath, **kwargs)
 
-    def head(self, path, size=1024):
+    def head(self, path: str, size: int = 1024) -> bytes:
         """Get the first ``size`` bytes from file"""
         with self.open(path, "rb") as f:
             return f.read(size)
 
-    def tail(self, path, size=1024):
+    def tail(self, path: str, size: int = 1024) -> bytes:
         """Get the last ``size`` bytes from file"""
         with self.open(path, "rb") as f:
             f.seek(max(-size, -f.size), 2)
@@ -1024,8 +1247,14 @@ class AbstractFileSystem(metaclass=_Cached):
         raise NotImplementedError
 
     def copy(
-        self, path1, path2, recursive=False, maxdepth=None, on_error=None, **kwargs
-    ):
+        self,
+        path1: Union[List[str], str],
+        path2: str,
+        recursive: bool = False,
+        maxdepth: Optional[int] = None,
+        on_error: Optional[str] = None,
+        **kwargs,
+    ) -> None:
         """Copy within two locations in the filesystem
 
         on_error : "raise", "ignore"
@@ -1064,7 +1293,13 @@ class AbstractFileSystem(metaclass=_Cached):
                 if on_error == "raise":
                     raise
 
-    def expand_path(self, path, recursive=False, maxdepth=None, **kwargs):
+    def expand_path(
+        self,
+        path: Union[List[str], str],
+        recursive: Optional[bool] = False,
+        maxdepth: Optional[int] = None,
+        **kwargs,
+    ) -> List[str]:
         """Turn one or more globs or directories into a list of all matching paths
         to files or directories.
 
@@ -1075,7 +1310,7 @@ class AbstractFileSystem(metaclass=_Cached):
             raise ValueError("maxdepth must be at least 1")
 
         if isinstance(path, str):
-            out = self.expand_path([path], recursive, maxdepth)
+            out: Union[List, Set] = self.expand_path([path], recursive, maxdepth)
         else:
             out = set()
             path = [self._strip_protocol(p) for p in path]
@@ -1112,7 +1347,14 @@ class AbstractFileSystem(metaclass=_Cached):
             raise FileNotFoundError(path)
         return list(sorted(out))
 
-    def mv(self, path1, path2, recursive=False, maxdepth=None, **kwargs):
+    def mv(
+        self,
+        path1: str,
+        path2: str,
+        recursive: bool = False,
+        maxdepth: None = None,
+        **kwargs,
+    ) -> None:
         """Move file(s) from one location to another"""
         if path1 == path2:
             logger.debug(
@@ -1122,7 +1364,7 @@ class AbstractFileSystem(metaclass=_Cached):
             self.copy(path1, path2, recursive=recursive, maxdepth=maxdepth)
             self.rm(path1, recursive=recursive)
 
-    def rm_file(self, path):
+    def rm_file(self, path: str) -> None:
         """Delete a file"""
         self._rm(path)
 
@@ -1131,7 +1373,7 @@ class AbstractFileSystem(metaclass=_Cached):
         # this is the old name for the method, prefer rm_file
         raise NotImplementedError
 
-    def rm(self, path, recursive=False, maxdepth=None):
+    def rm(self, path: str, recursive: bool = False, maxdepth: None = None) -> None:
         """Delete files.
 
         Parameters
@@ -1151,7 +1393,7 @@ class AbstractFileSystem(metaclass=_Cached):
             self.rm_file(p)
 
     @classmethod
-    def _parent(cls, path):
+    def _parent(cls, path: str) -> str:
         path = cls._strip_protocol(path)
         if "/" in path:
             parent = path.rsplit("/", 1)[0].lstrip(cls.root_marker)
@@ -1181,13 +1423,13 @@ class AbstractFileSystem(metaclass=_Cached):
 
     def open(
         self,
-        path,
-        mode="rb",
-        block_size=None,
-        cache_options=None,
-        compression=None,
+        path: _PathLike,
+        mode: str = "rb",
+        block_size: Optional[int] = None,
+        cache_options: Optional[Dict[str, bool]] = None,
+        compression: Optional[str] = None,
         **kwargs,
-    ):
+    ) -> Any:
         """
         Return a file-like object from the filesystem
 
@@ -1254,7 +1496,7 @@ class AbstractFileSystem(metaclass=_Cached):
                 self.transaction.files.append(f)
             return f
 
-    def touch(self, path, truncate=True, **kwargs):
+    def touch(self, path: str, truncate: bool = True, **kwargs) -> None:
         """Create empty file, or update timestamp
 
         Parameters
@@ -1271,11 +1513,17 @@ class AbstractFileSystem(metaclass=_Cached):
         else:
             raise NotImplementedError  # update timestamp, if possible
 
-    def ukey(self, path):
+    def ukey(self, path: str) -> str:
         """Hash of file properties, to tell if it has changed"""
         return sha256(str(self.info(path)).encode()).hexdigest()
 
-    def read_block(self, fn, offset, length, delimiter=None):
+    def read_block(
+        self,
+        fn: str,
+        offset: int,
+        length: Optional[int],
+        delimiter: Optional[bytes] = None,
+    ) -> bytes:
         """Read a block of bytes from
 
         Starting at ``offset`` of the file, read ``length`` bytes.  If
@@ -1320,7 +1568,7 @@ class AbstractFileSystem(metaclass=_Cached):
                 length = size - offset
             return read_block(f, offset, length, delimiter)
 
-    def to_json(self):
+    def to_json(self) -> str:
         """
         JSON representation of this filesystem instance
 
@@ -1348,7 +1596,7 @@ class AbstractFileSystem(metaclass=_Cached):
         )
 
     @staticmethod
-    def from_json(blob):
+    def from_json(blob: str) -> DummyTestFS:
         """
         Recreate a filesystem instance from JSON representation
 
@@ -1381,7 +1629,13 @@ class AbstractFileSystem(metaclass=_Cached):
         # all instances already also derive from pyarrow
         return self
 
-    def get_mapper(self, root="", check=False, create=False, missing_exceptions=None):
+    def get_mapper(
+        self,
+        root: str = "",
+        check: bool = False,
+        create: bool = False,
+        missing_exceptions: None = None,
+    ) -> "FSMap":
         """Create key/value store based on this file-system
 
         Makes a MutableMapping interface to the FS at the given root path.
@@ -1398,7 +1652,7 @@ class AbstractFileSystem(metaclass=_Cached):
         )
 
     @classmethod
-    def clear_instance_cache(cls):
+    def clear_instance_cache(cls) -> None:
         """
         Clear the cache of filesystem instances.
 
@@ -1435,7 +1689,7 @@ class AbstractFileSystem(metaclass=_Cached):
         """Alias of `AbstractFileSystem.mkdir`."""
         return self.mkdir(path, create_parents=create_parents, **kwargs)
 
-    def mkdirs(self, path, exist_ok=False):
+    def mkdirs(self, path: str, exist_ok: bool = False) -> None:
         """Alias of `AbstractFileSystem.makedirs`."""
         return self.makedirs(path, exist_ok=exist_ok)
 
@@ -1443,11 +1697,16 @@ class AbstractFileSystem(metaclass=_Cached):
         """Alias of `AbstractFileSystem.ls`."""
         return self.ls(path, detail=detail, **kwargs)
 
-    def cp(self, path1, path2, **kwargs):
+    def cp(
+        self,
+        path1: Union[List[str], Tuple[str, str], str],
+        path2: Union[Tuple[str, str], str],
+        **kwargs,
+    ) -> None:
         """Alias of `AbstractFileSystem.copy`."""
         return self.copy(path1, path2, **kwargs)
 
-    def move(self, path1, path2, **kwargs):
+    def move(self, path1: str, path2: str, **kwargs) -> None:
         """Alias of `AbstractFileSystem.mv`."""
         return self.mv(path1, path2, **kwargs)
 
@@ -1521,16 +1780,16 @@ class AbstractBufferedFile(io.IOBase):
 
     def __init__(
         self,
-        fs,
-        path,
-        mode="rb",
-        block_size="default",
-        autocommit=True,
-        cache_type="readahead",
-        cache_options=None,
-        size=None,
+        fs: Union[DummyTestFS, HTTPFileSystem, DummyAsyncFS],
+        path: str,
+        mode: str = "rb",
+        block_size: Optional[Union[int, str]] = "default",
+        autocommit: bool = True,
+        cache_type: str = "readahead",
+        cache_options: Optional[Dict[str, bool]] = None,
+        size: None = None,
         **kwargs,
-    ):
+    ) -> None:
         """
         Template for files with buffered reading and writing
 
@@ -1652,7 +1911,7 @@ class AbstractBufferedFile(io.IOBase):
         """Current file location"""
         return self.loc
 
-    def seek(self, loc, whence=0):
+    def seek(self, loc: int, whence: int = 0) -> int:
         """Set current file location
 
         Parameters
@@ -1763,7 +2022,7 @@ class AbstractBufferedFile(io.IOBase):
         """Get the specified set of bytes from remote"""
         raise NotImplementedError
 
-    def read(self, length=-1):
+    def read(self, length: int = -1) -> bytes:
         """
         Return data from cache, or fetch pieces as necessary
 
@@ -1856,7 +2115,7 @@ class AbstractBufferedFile(io.IOBase):
     def readinto1(self, b):
         return self.readinto(b)
 
-    def close(self):
+    def close(self) -> None:
         """Close file
 
         Finalizes writes, discards cache
@@ -1889,17 +2148,17 @@ class AbstractBufferedFile(io.IOBase):
         """Whether opened for writing"""
         return self.mode in {"wb", "ab"} and not self.closed
 
-    def __del__(self):
+    def __del__(self) -> None:
         if not self.closed:
             self.close()
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "<File-like object %s, %s>" % (type(self.fs).__name__, self.path)
 
     __repr__ = __str__
 
-    def __enter__(self):
+    def __enter__(self) -> Union[HTTPFile, HTTPStreamFile]:
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args) -> None:
         self.close()
