@@ -1,21 +1,44 @@
 """Helper functions for a standard streaming compression API"""
 from bz2 import BZ2File
+from typing import (
+    IO,
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Union,
+)
 from zipfile import ZipFile
 
 import fsspec.utils
 from fsspec.spec import AbstractBufferedFile
 
+if TYPE_CHECKING:
+    from fsspec.implementations.local import LocalFileOpener
 
-def noop_file(file, mode, **kwargs):
+
+def noop_file(file: "LocalFileOpener", mode: str, **kwargs) -> "LocalFileOpener":
     return file
+
+
+# TODO: figure out more precise type-checking
+Callback = Callable[..., Any]
 
 
 # TODO: files should also be available as contexts
 # should be functions of the form func(infile, mode=, **kwargs) -> file-like
-compr = {None: noop_file}
+compr: Dict[Optional[str], Callback] = {None: noop_file}
 
 
-def register_compression(name, callback, extensions, force=False):
+def register_compression(
+    name: str,
+    callback: Callback,
+    extensions: Union[str, Iterable[str]],
+    force: bool = False,
+) -> None:
     """Register an "inferable" file compression type.
 
     Registers transparent file compression type for use with fsspec.open.
@@ -54,12 +77,17 @@ def register_compression(name, callback, extensions, force=False):
         fsspec.utils.compressions[ext] = name
 
 
-def unzip(infile, mode="rb", filename=None, **kwargs):
+def unzip(
+    infile: "LocalFileOpener",
+    mode: str = "rb",
+    filename: Optional[str] = None,
+    **kwargs,
+) -> IO[bytes]:
     if "r" not in mode:
         filename = filename or "file"
         z = ZipFile(infile, mode="w", **kwargs)
         fo = z.open(filename, mode="w")
-        fo.close = lambda closer=fo.close: closer() or z.close()
+        fo.close = lambda closer=fo.close: closer() or z.close()  # type: ignore[method-assign,misc,func-returns-value]
         return fo
     z = ZipFile(infile)
     if filename is None:
@@ -166,6 +194,6 @@ except ImportError:
     pass
 
 
-def available_compressions():
+def available_compressions() -> List[Optional[str]]:
     """Return a list of the implemented compressions."""
     return list(compr)
